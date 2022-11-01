@@ -9,8 +9,10 @@ pages:
   - pip install sphinxcontrib-blockdiag sphinxcontrib-nwdiag sphinx_rtd_theme
   - make -C ja html
   - make -C en html
-  - mv ja/build/html/ public/ja/
-  - mv en/build/html/ public/en/
+  - ls ja/build/html
+  - ls en/build/html
+  - mv ja/build/html public/ja
+  - mv en/build/html public/en
   artifacts:
     paths:
     - public
