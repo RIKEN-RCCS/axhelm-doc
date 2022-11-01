@@ -1,0 +1,18 @@
+image: python:2.7
+stages:
+  - pages
+
+pages:
+  stage: pages
+  script:
+  - pip install sphinx
+  - pip install sphinxcontrib-blockdiag sphinxcontrib-nwdiag sphinx_rtd_theme
+  - make -C ja html
+  - make -C en html
+  - mv ja/build/html/ public/ja/
+  - mv en/build/html/ public/en/
+  artifacts:
+    paths:
+    - public
+  only:
+  - main
