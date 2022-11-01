@@ -1,0 +1,17 @@
+fapp -C -d ./rep1  -Hevent=pa1  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep2  -Hevent=pa2  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep3  -Hevent=pa3  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep4  -Hevent=pa4  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep5  -Hevent=pa5  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep6  -Hevent=pa6  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep7  -Hevent=pa7  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep8  -Hevent=pa8  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep9  -Hevent=pa9  mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep10 -Hevent=pa10 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep11 -Hevent=pa11 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep12 -Hevent=pa12 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep13 -Hevent=pa13 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep14 -Hevent=pa14 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep15 -Hevent=pa15 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep16 -Hevent=pa16 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100
+fapp -C -d ./rep17 -Hevent=pa17 mpiexec ./tune4 7 1 1920 NATIVE+OPENMP CPU 1 100

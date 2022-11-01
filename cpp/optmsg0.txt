@@ -1,0 +1,28 @@
+Optimization messages
+  jwd8203o-i  "axhelm-0.cpp", line 64: このループをフルアンローリングしました。
+  jwd8203o-i  "axhelm-0.cpp", line 65: このループをフルアンローリングしました。
+  jwd8203o-i  "axhelm-0.cpp", line 71: このループをフルアンローリングしました。
+  jwd6001s-i  "axhelm-0.cpp", line 72: ループ制御変数'i'のループをSIMD化しました。
+  jwd8222o-i  "axhelm-0.cpp", line 78: このループで必要なプリフェッチの数が、ハードウェアプリフェッチの許容数を超えたため、prefetch命令を生成しました。
+  jwd8662o-i  "axhelm-0.cpp", line 78: スケジューリング結果を得られなかったため、ソフトウェアパイプライニングを抑止しました。
+  jwd8203o-i  "axhelm-0.cpp", line 80: このループをフルアンローリングしました。
+  jwd6004s-i  "axhelm-0.cpp", line 94: リダクション演算を含むループ制御変数'm'のループをSIMD化しました。
+  jwd8209o-i  "axhelm-0.cpp", line 100: 多項式の演算順序を変更しました。
+  jwd8668o-i  "axhelm-0.cpp", line 106: 命令数が多いため、ソフトウェアパイプライニングを抑止しました。
+  jwd8203o-i  "axhelm-0.cpp", line 106: このループをフルアンローリングしました。
+  jwd8203o-i  "axhelm-0.cpp", line 108: このループをフルアンローリングしました。
+  jwd6004s-i  "axhelm-0.cpp", line 112: リダクション演算を含むループ制御変数'm'のループをSIMD化しました。
+Optimization messages
+  jwd8203o-i  "axhelm-0.cpp", line 64: Loop full unrolling is applied to this loop.
+  jwd8203o-i  "axhelm-0.cpp", line 65: Loop full unrolling is applied to this loop.
+  jwd8203o-i  "axhelm-0.cpp", line 71: Loop full unrolling is applied to this loop.
+  jwd6001s-i  "axhelm-0.cpp", line 72: SIMD conversion is applied to this loop with the loop variable 'i'.
+  jwd8222o-i  "axhelm-0.cpp", line 78: The prefetch instructions were generated because the number of prefetch required in this loop is greater than the allowable number of hardware-prefetch.
+  jwd8662o-i  "axhelm-0.cpp", line 78: This loop is not software pipelined because no schedule is obtained.
+  jwd8203o-i  "axhelm-0.cpp", line 80: Loop full unrolling is applied to this loop.
+  jwd6004s-i  "axhelm-0.cpp", line 94: SIMD conversion is applied to this loop with the loop variable 'm'. The loop contains a reduction operation.
+  jwd8209o-i  "axhelm-0.cpp", line 100: Evaluation order of polynomial expression is changed according to commutative law of addition and multiplication.
+  jwd8668o-i  "axhelm-0.cpp", line 106: This loop is not software pipelined because the loop contains too many instructions.
+  jwd8203o-i  "axhelm-0.cpp", line 106: Loop full unrolling is applied to this loop.
+  jwd8203o-i  "axhelm-0.cpp", line 108: Loop full unrolling is applied to this loop.
+  jwd6004s-i  "axhelm-0.cpp", line 112: SIMD conversion is applied to this loop with the loop variable 'm'. The loop contains a reduction operation.

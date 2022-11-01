@@ -1,0 +1,32 @@
+Optimization messages
+  jwd8203o-i  "axhelm-1.cpp", line 64: このループをフルアンローリングしました。
+  jwd8203o-i  "axhelm-1.cpp", line 65: このループをフルアンローリングしました。
+  jwd8203o-i  "axhelm-1.cpp", line 71: このループをフルアンローリングしました。
+  jwd6001s-i  "axhelm-1.cpp", line 72: ループ制御変数'i'のループをSIMD化しました。
+  jwd8668o-i  "axhelm-1.cpp", line 78: 命令数が多いため、ソフトウェアパイプライニングを抑止しました。
+  jwd8203o-i  "axhelm-1.cpp", line 78: このループをフルアンローリングしました。
+  jwd6001s-i  "axhelm-1.cpp", line 80: ループ制御変数'i'のループをSIMD化しました。
+  jwd8203o-i  "axhelm-1.cpp", line 95: このループをフルアンローリングしました。
+  jwd8209o-i  "axhelm-1.cpp", line 101: 多項式の演算順序を変更しました。
+  jwd8209o-i  "axhelm-1.cpp", line 102: 多項式の演算順序を変更しました。
+  jwd8209o-i  "axhelm-1.cpp", line 103: 多項式の演算順序を変更しました。
+  jwd8662o-i  "axhelm-1.cpp", line 107: スケジューリング結果を得られなかったため、ソフトウェアパイプライニングを抑止しました。
+  jwd8203o-i  "axhelm-1.cpp", line 107: このループをフルアンローリングしました。
+  jwd6001s-i  "axhelm-1.cpp", line 109: ループ制御変数'i'のループをSIMD化しました。
+  jwd8203o-i  "axhelm-1.cpp", line 114: このループをフルアンローリングしました。
+Optimization messages
+  jwd8203o-i  "axhelm-1.cpp", line 64: Loop full unrolling is applied to this loop.
+  jwd8203o-i  "axhelm-1.cpp", line 65: Loop full unrolling is applied to this loop.
+  jwd8203o-i  "axhelm-1.cpp", line 71: Loop full unrolling is applied to this loop.
+  jwd6001s-i  "axhelm-1.cpp", line 72: SIMD conversion is applied to this loop with the loop variable 'i'.
+  jwd8668o-i  "axhelm-1.cpp", line 78: This loop is not software pipelined because the loop contains too many instructions.
+  jwd8203o-i  "axhelm-1.cpp", line 78: Loop full unrolling is applied to this loop.
+  jwd6001s-i  "axhelm-1.cpp", line 80: SIMD conversion is applied to this loop with the loop variable 'i'.
+  jwd8203o-i  "axhelm-1.cpp", line 95: Loop full unrolling is applied to this loop.
+  jwd8209o-i  "axhelm-1.cpp", line 101: Evaluation order of polynomial expression is changed according to commutative law of addition and multiplication.
+  jwd8209o-i  "axhelm-1.cpp", line 102: Evaluation order of polynomial expression is changed according to commutative law of addition and multiplication.
+  jwd8209o-i  "axhelm-1.cpp", line 103: Evaluation order of polynomial expression is changed according to commutative law of addition and multiplication.
+  jwd8662o-i  "axhelm-1.cpp", line 107: This loop is not software pipelined because no schedule is obtained.
+  jwd8203o-i  "axhelm-1.cpp", line 107: Loop full unrolling is applied to this loop.
+  jwd6001s-i  "axhelm-1.cpp", line 109: SIMD conversion is applied to this loop with the loop variable 'i'.
+  jwd8203o-i  "axhelm-1.cpp", line 114: Loop full unrolling is applied to this loop.

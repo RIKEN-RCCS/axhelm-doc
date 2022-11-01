@@ -1,0 +1,593 @@
+.. axhelm documentation master file, created by
+   sphinx-quickstart on Wed Jun 22 17:36:25 2022.
+   You can adapt this file completely to your liking, but it should at least
+   contain the root `toctree` directive.
+
+Welcome to axhelm's documentation!
+==================================
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Contents:
+
+
+
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`
+
+Introduction
+================================================================================
+この記事は理研
+R-CCS
+の辻さんの行ったチューニングを再現しながら富岳のためのチューニング事例としたものです。オリジナルの文献としては
+http://id.nii.ac.jp/1001/00214101
+（日本語）、
+https://doi.org/10.1145/3503470.3503476
+を御参照ください。
+
+This document is based on a reproduction test of a tuning by Dr. Tsuji at RIKEN R-CCS.
+For the original literature, see 
+https://doi.org/10.1145/3503470.3503476
+.
+
+What it computes
+--------------------------------------------------------------------------------
+今回紹介するコードは、
+axhelm
+というスペクトル要素法のカーネル部となります。これはある種の高次の有限要素法で、六面体要素の中に
+8\ :sup:`3` 
+個の選点を持つものです。正確には次数は可変ですが、今回は倍精度の
+SIMD
+長である
+8
+に固定してチューニングを進めています。
+
+We examine a kernel from "axholm", a spectral element method (a family of finite element method). 
+It has 8\ :sup:`3` points in a hexahedron element.
+Actually it is variable order, but in this tuning, we fix it to 8, the SIMD length of double precision.
+
+それぞれの軸方向のベクトルに
+8×8
+の行列を掛けることで勾配が求まります。この箇所は
+8\ :sup:`4`
+の4重ループとなります（
+loop-2a
+）。
+
+By multiplying an 8×8 matrix for the vectors of each axis, we have gradients.
+It is a quadruple loop in 8\ :sup:`4` (loop-2a).
+
+次にこの勾配に
+3×3
+の対称行列の幾何係数を掛けます。幾何係数の役割は、密度と体積要素で重みを取ること、六面体の内部座標での勾配を外部のユークリッド座標での勾配に変換することです。
+3×3
+対称行列に関しては手動で展開して書かれているので、この箇所は
+8\ :sup:`3`
+の3重ループとなります（
+loop-2b
+）。
+
+Next, we multiply a 3×3 symmetric matrix of geometry factors.
+This connects internal coordinates of the element with the external ones, including the waiting by volume and density.
+This part is a triple loop in 8\ :sup:`3`, with a relatively large data fetching of 6×8\ :sup:`3` words (loop-2b).
+
+実際には
+loop-2a
+と
+loop-2b
+は融合して書かれており、中間変数の領域を節約しています。ここから
+loop-3
+へと行く間には
+3×8\ :sup:`3` 
+語の中間変数が発生しています。
+12 KiB
+なので
+L1
+キャッシュ（
+64 KiB
+）に十分収まります。
+
+Loop-2a and Loop-2b are fused to save the space for intermediate variables.
+From these to loop-3, we need a storage of
+3×8\ :sup:`3` 
+words, which is 12 KiB and fits into the 64 KiB L1 cache.
+
+最後に最初に使った勾配行列の転置を掛けます（
+loop-3
+）。
+
+Finally, we multiply the transposed matrix of the previous gradients. 
+
+数式で書くと、行列
+
+.. math::
+
+	A=
+	\begin{pmatrix}
+	D_1 \\ D_2 \\ D_3
+	\end{pmatrix}^T
+	\begin{pmatrix}
+	G_{11} & G_{12} & G_{13} \\
+	G_{12} & G_{22} & G_{23} \\
+	G_{13} & G_{23} & G_{33}
+	\end{pmatrix}
+	\begin{pmatrix}
+	D_1 \\ D_2 \\ D_3
+	\end{pmatrix}
+
+を作用させ
+:math:`A \vec{u}`
+を計算しているというカーネルになります。勾配の転置を掛ける意味がわかりにくいかもしれませんが、次のように定義された内積
+
+.. math::
+
+	(\nabla \vec v, \nabla \vec u) = \vec v^T A \vec u
+
+の計算に対して最後の
+:math:`\vec v^T`
+を掛ける部分だけ省いたものになっています。
+より詳しい定式化については
+https://arxiv.org/abs/2104.05829
+をご参照ください。
+
+A dot product defined as:
+
+.. math::
+
+	(v,u)^e  := \sum_{ijk} v_{ijk} \rho_{ijk} 
+	\left| \frac{\partial  x}{\partial  r} \right|_{ijk} 
+	u_{ijk}
+	\equiv  v^T \mathsf B  u
+
+Dot product of gradients:
+
+.. math::
+	
+	(\nabla v,\nabla u)^e := &
+	\sum_{ijk} \sum_{a,b,c,=1}^3
+	\left( \frac{\partial v_{ijk}}{\partial r^a}\right)
+	\left(
+    		\frac{\partial r^a}{\partial x^c} \frac{\partial r^b}{\partial x^c} B_{ijk}
+	\right)
+	\left( \frac{\partial u_{ijk}}{\partial r^b}\right)
+	\nonumber \\
+	\equiv&  (\mathsf D  v)^T \mathsf A (\mathsf D  u)
+
+This kernel computes:
+
+.. math::
+
+	\left(\nabla [\,],\nabla u \right)^e := \mathsf D^T 
+	\left( \left( \mathsf A \left(\mathsf D  u\right) \right) \right)
+	
+
+Organizations
+--------------------------------------------------------------------------------
+
+この記事では
+"as-is"
+の
+tune-0
+から始め、
+tune-1
+では
+SIMD
+化を改善します。
+tune-2
+では連続アクセス化によるギャザー命令の回避を行い、
+tune-3
+ではループの
+collapse
+を行うことでソフトウェアパイプライニングを促進します。
+最後に
+tune-4
+で、プリフェッチ命令の挿入を促進させメモリアクセス性能を向上させます。途中
+tune-1a
+で、
+tune-1
+と同等の
+SIMD
+化をディレクティブを用いずに行う方法も紹介します。
+
+As-is performance (tune-0)
+================================================================================
+
+.. literalinclude:: ../../cpp/axhelm-0.cpp
+   :language: cpp
+   :tab-width: 4
+   :lines: 49-
+   :linenos:
+   :lineno-match:
+   :emphasize-lines: 46,64
+   :caption: axhelm-0.cpp
+
+富士通コンパイラ
+4.8.0 (tcsds-1.2.35)
+の
+trad
+モードにオプション
+``-Kfast,openmp,ocl,optmsg=2``
+でコンパイルし
+2.0 GHz
+で実行したところ、
+1
+ノードあたり
+**126 GFLOP/s**
+となりました。ノードあたりの
+MPI
+プロセスは
+4
+、プロセスあたりのスレッドは
+12
+という標準的な組み合わせを用いました。問題サイズは
+7680
+要素です。なお、
+GFLOP/s
+値は理論演算数からプログラムの内部で求めているため、プロファイラの出力するものとは若干ずれることがあります。
+
+SIMD conversion (tune-1)
+================================================================================
+先程のコードでコンパイラは次のような最適化メッセージを出力しています（抜粋）：
+
+.. code-block:: none
+   :emphasize-lines: 4,9
+
+	  jwd8222o-i  "axhelm-0.cpp", line 78: このループで必要なプリフェッチの数が、ハードウェアプリフェッチの許容数を超えたため、prefetch命令を生成しました。
+	  jwd8662o-i  "axhelm-0.cpp", line 78: スケジューリング結果を得られなかったため、ソフトウェアパイプライニングを抑止しました。
+	  jwd8203o-i  "axhelm-0.cpp", line 80: このループをフルアンローリングしました。
+	  jwd6004s-i  "axhelm-0.cpp", line 94: リダクション演算を含むループ制御変数'm'のループをSIMD化しました。
+	  jwd8209o-i  "axhelm-0.cpp", line 100: 多項式の演算順序を変更しました。
+	  jwd8668o-i  "axhelm-0.cpp", line 106: 命令数が多いため、ソフトウェアパイプライニングを抑止しました。
+	  jwd8203o-i  "axhelm-0.cpp", line 106: このループをフルアンローリングしました。
+	  jwd8203o-i  "axhelm-0.cpp", line 108: このループをフルアンローリングしました。
+	  jwd6004s-i  "axhelm-0.cpp", line 112: リダクション演算を含むループ制御変数'm'のループをSIMD化しました。
+
+.. code-block:: none
+   :emphasize-lines: 4,9
+
+	  jwd8222o-i  "axhelm-0.cpp", line 78: The prefetch instructions were generated because the number of prefetch required in this loop is greater than the allowable number of hardware-prefetch.
+	  jwd8662o-i  "axhelm-0.cpp", line 78: This loop is not software pipelined because no schedule is obtained.
+	  jwd8203o-i  "axhelm-0.cpp", line 80: Loop full unrolling is applied to this loop.
+	  jwd6004s-i  "axhelm-0.cpp", line 94: SIMD conversion is applied to this loop with the loop variable 'm'. The loop contains a reduction operation.
+	  jwd8209o-i  "axhelm-0.cpp", line 100: Evaluation order of polynomial expression is changed according to commutative law of addition and multiplication.
+	  jwd8668o-i  "axhelm-0.cpp", line 106: This loop is not software pipelined because the loop contains too many instructions.
+	  jwd8203o-i  "axhelm-0.cpp", line 106: Loop full unrolling is applied to this loop.
+	  jwd8203o-i  "axhelm-0.cpp", line 108: Loop full unrolling is applied to this loop.
+	  jwd6004s-i  "axhelm-0.cpp", line 112: SIMD conversion is applied to this loop with the loop variable 'm'. The loop contains a reduction operation.
+
+最内側ループの添字
+``m``
+に対してコンパイラの
+SIMD
+化が適用されたことがわかります。最内側のループに対してベクトル化を行うのは多くのコンパイラにとって標準的な挙動ですが、以下の理由からこれは最適な
+SIMD
+化とはいえません：
+
+ * 長さが
+   8
+   のベクトル同士の内積の計算に
+   1
+   回の乗算と
+   1
+   回の水平加算の命令となってしまい演算効率が悪い（十分に長いベクトル同士の内積であれば
+   SIMD
+   の積和命令を繰り返し最後に水平和を取るという方法も有効）
+ * 勾配の計算のみが
+   SIMD
+   化され幾何係数を掛ける部分が一切
+   SIMD
+   化されない
+
+このため最内側のループ変数
+``m``
+に対してではなくそのひとつ外側の
+``i``
+に対して
+SIMD
+化を行うというのが目指す方向となります。簡単にこれを実現するのは最内側の
+m-loop
+をアンロールしてしまうことで、手動アンロールしなくてもコンパイラ提供のディレクティブを使って以下のように書けます：
+
+.. literalinclude:: ../../cpp/axhelm-1.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 94-99
+   :caption: axhelm-1.cpp
+
+.. literalinclude:: ../../cpp/axhelm-1.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 113-118
+
+このように最内側の
+m-loop
+を
+2
+箇所アンロールすることで、コンパイラはそのひとつ外側の
+i-loop
+に対して
+SIMD
+化を行います。実際にコンパイラは次のようなメッセージを出力します：
+
+.. code-block:: none
+   :emphasize-lines: 5,6,9,10
+
+     jwd8203o-i  "axhelm-1.cpp", line 71: このループをフルアンローリングしました。
+     jwd6001s-i  "axhelm-1.cpp", line 72: ループ制御変数'i'のループをSIMD化しました。
+     jwd8668o-i  "axhelm-1.cpp", line 78: 命令数が多いため、ソフトウェアパイプライニングを抑止しました。
+     jwd8203o-i  "axhelm-1.cpp", line 78: このループをフルアンローリングしました。
+     jwd6001s-i  "axhelm-1.cpp", line 80: ループ制御変数'i'のループをSIMD化しました。
+     jwd8203o-i  "axhelm-1.cpp", line 95: このループをフルアンローリングしました。
+     jwd8662o-i  "axhelm-1.cpp", line 107: スケジューリング結果を得られなかったため、ソフトウェアパイプライニングを抑止しました。
+     jwd8203o-i  "axhelm-1.cpp", line 107: このループをフルアンローリングしました。
+     jwd6001s-i  "axhelm-1.cpp", line 109: ループ制御変数'i'のループをSIMD化しました。
+     jwd8203o-i  "axhelm-1.cpp", line 114: このループをフルアンローリングしました。
+
+.. code-block:: none
+   :emphasize-lines: 5,6,9,10
+
+     jwd8203o-i  "axhelm-1.cpp", line 71: Loop full unrolling is applied to this loop.
+     jwd6001s-i  "axhelm-1.cpp", line 72: SIMD conversion is applied to this loop with the loop variable 'i'.
+     jwd8668o-i  "axhelm-1.cpp", line 78: This loop is not software pipelined because the loop contains too many instructions.
+     jwd8203o-i  "axhelm-1.cpp", line 78: Loop full unrolling is applied to this loop.
+     jwd6001s-i  "axhelm-1.cpp", line 80: SIMD conversion is applied to this loop with the loop variable 'i'.
+     jwd8203o-i  "axhelm-1.cpp", line 95: Loop full unrolling is applied to this loop.
+     jwd8662o-i  "axhelm-1.cpp", line 107: This loop is not software pipelined because no schedule is obtained.
+     jwd8203o-i  "axhelm-1.cpp", line 107: Loop full unrolling is applied to this loop.
+     jwd6001s-i  "axhelm-1.cpp", line 109: SIMD conversion is applied to this loop with the loop variable 'i'.
+     jwd8203o-i  "axhelm-1.cpp", line 114: Loop full unrolling is applied to this loop.
+
+この変更により
+**329 GFLOP/s**
+が得られました。
+
+Alternative solution (tune-1a)
+--------------------------------------------------------------------------------
+
+ディレクティブを用いずにほぼ同じ
+i-loop
+に対するコンパイラ
+SIMD
+化を実現するには、次のようにループを分割しループの順序を入れ替えるという書き方もあります。コードの変更量は大きくなりますが他に応用の効くかもしれない手法でもありここで紹介しておきます。
+
+.. literalinclude:: ../../cpp/axhelm-1a.cpp
+   :language: cpp
+   :tab-width: 4
+   :lines: 79-
+   :linenos:
+   :emphasize-lines: 3,9,16,34,40,46
+   :caption: axhelm-1a.cpp
+   :lineno-match:
+
+i-loop
+が
+3
+分割されその真中のブロックが
+m-loop
+の内側に入っていること、スカラ変数だった
+``qr, qs, qt``
+が長さ8の配列に変更されていることに注意してください。
+
+このバージョンでは上述の方法と完全に同一の結果とまではならなかったのですが
+**321 GFLOP/s**
+が得られています。
+
+Avoid gathering by continuous access (tune-2)
+================================================================================
+
+ここまでの
+SIMD
+化で、一部非効率なメモリアクセスが残っています。
+
+.. literalinclude:: ../../cpp/axhelm-1.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 95-99
+   :emphasize-lines: 2
+   :caption: axhelm-1.cpp
+
+添字
+``[i]``
+によるベクトル化なので、この3行は最初がベクトル×スカラーの積、残りの２つがスカラ×ーベクトル積に相当します。最初の行の
+``D[i][m]``
+は添字に
+``[i]``
+を含むのでベクトル化されますが、最内側ではないのでストライドないしギャザーアクセスになってしまいます。実際、コンパイラは次のようなコードを出力しています：
+
+.. code-block:: none
+
+	/*     96 */    index   z17.d, 0, 8
+	/*     96 */    ld1d    {z16.d}, p0/z, [x16, z17.d, lsl #3]     //  "s_D"
+
+幸い、この行列は
+8×8
+と小さく、要素間での依存もないので関数の入り口で転置を作っておくことができます。実際にそのようなチューニングを行ったのが以下のコードになります：
+
+.. literalinclude:: ../../cpp/axhelm-2.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 62-70
+   :caption: axhelm-2.cpp
+   :emphasize-lines: 6
+
+.. literalinclude:: ../../cpp/axhelm-2.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 97-101
+   :emphasize-lines: 2
+
+``s_T[i][j]``
+が 
+``s_D[j][i]`` 
+の転置行列となります。この変更で
+**358 GFLOPS/s**
+（
+tune-1
+から
++8.8%
+）となりました。
+
+Software pipelining by loop collapsing (tune-3)
+================================================================================
+
+i-loop
+の長さが丁度
+SIMD
+長の8としてベクトル化された後は、そのひとつ外側の
+j-loop
+でソフトウェアパイプライニングのようなスケジューリングを目指すことになります。 ただし（コンパイル時に既知の）
+j-loop
+の長さは
+8
+であり、ソフトウェアパイプライニングを適用するには短すぎるようです。このため現状のコードでは、コンパイラは
+j-loop
+をフルアンロールし、既に十分に大きなループボディとなった
+k-loop
+に対しては何もしないという選択をしています。
+
+ここでは、
+j-loop
+と
+k-loop
+を
+collapse
+し長さ
+64
+のループとすることでより良いスケジューリングが得られるようにします。 ループの
+collapse
+は
+OpemMP
+によるスレッド並列化の際に最外ループの並列度が十分でないときにディレクティブから行うこともあるやり方ですが、単に
+collapse
+するだけのディレクティブは無かったので手動で行うこととします。
+
+.. literalinclude:: ../../cpp/axhelm-3.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 84-86
+   :caption: axhelm-3.cpp
+
+3
+箇所に同様の変更を施しコンパイラの出力メッセージは以下のようになっています：
+
+.. code-block:: none
+   :emphasize-lines: 1-2,4-5,8-9
+
+     jwd8204o-i  "axhelm-3.cpp", line 73: ループにソフトウェアパイプライニングを適用しました。
+     jwd8205o-i  "axhelm-3.cpp", line 73: ループの繰返し数が64回以上の時、ソフトウェアパイプライニングを適用したループが実行時に選択されます。
+     jwd6001s-i  "axhelm-3.cpp", line 77: ループ制御変数'i'のループをSIMD化しました。
+     jwd8204o-i  "axhelm-3.cpp", line 84: ループにソフトウェアパイプライニングを適用しました。
+     jwd8205o-i  "axhelm-3.cpp", line 84: ループの繰返し数が48回以上の時、ソフトウェアパイプライニングを適用したループが実行時に選択されます。
+     jwd6001s-i  "axhelm-3.cpp", line 88: ループ制御変数'i'のループをSIMD化しました。
+     jwd8203o-i  "axhelm-3.cpp", line 103: このループをフルアンローリングしました。
+     jwd8204o-i  "axhelm-3.cpp", line 115: ループにソフトウェアパイプライニングを適用しました。
+     jwd8205o-i  "axhelm-3.cpp", line 115: ループの繰返し数が48回以上の時、ソフトウェアパイプライニングを適用したループが実行時に選択されます。
+     jwd6001s-i  "axhelm-3.cpp", line 119: ループ制御変数'i'のループをSIMD化しました。
+     jwd8203o-i  "axhelm-3.cpp", line 124: このループをフルアンローリングしました。
+
+この変更で
+**374 GFLOP/s**
+（
+tune-2
+から
++4.5%
+）が得られました。
+
+Enabling software prefetch (tune-4)
+================================================================================
+
+ここまでのコードで、若干冗長なアドレス計算が残っています。
+
+.. literalinclude:: ../../cpp/axhelm-3.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 84-96
+   :caption: axhelm-3.cpp
+   :emphasize-lines: 7
+
+``ggeo``
+は多次元配列でいえば
+``double ggeo[Nelements][7][512]``
+のような次元となります（
+``p_Np=512``
+）。一度 collaps させた以上は、変数
+``jk``
+から直接アドレスを求めることができます。
+
+.. literalinclude:: ../../cpp/axhelm-4.cpp
+   :language: cpp
+   :tab-width: 4
+   :linenos:
+   :lineno-match:
+   :lines: 84-90
+   :caption: axhelm-4.cpp
+   :emphasize-lines: 7
+
+わずかな整数演算の節約に見えるのですが、 得られた性能は
+**606 GFLOP/s**
+（ 
+tune-3
+から 
++62% 
+）と大幅に伸びています。この理由なのですが、ループ変数
+``jk``
+に直接比例して伸びるようなアドレス計算となったことでコンパイラがソフトウェアプリフェッチ命令を出すようになったことです。今回、プリフェッチ命令の出力についてはコンパイラの最適化メッセージからはその有無を確認できませんでしたが、 コンパイラの出力したアセンブリコードからは確認できます。
+
+.. code-block:: none
+   :caption: $ grep -n prfm axhelm-4.s より
+
+	1313:/*     91 */	prfm	2, [x30, 824]  // PLDL2KEEP for 00010 
+	1320:/*     91 */	prfm	0, [x30, 312]  // PLDL1KEEP for 00000
+	4324:/*    130 */	prfm	18, [x12, 760] // PSTL2KEEP for 10010
+	4325:/*    130 */	prfm	16, [x12, 248] // PSTL1KEEP for 10000
+
+命令の詳細については
+ARMv8-A Architecture Reference Manual C5.6.145
+を御覧ください。
+
+オリジナルの文献では最終段のチューニングとしては手動でソフトウェアプリフェッチを挿入していましたが、今回はコンパイラによる挿入で同等のチューニングが達成できたことになります。
+
+----
+
+まとめ
+================================================================================
+
+ここまでカーネルと性能の一覧は以下のようになります。
+
+.. csv-table::
+    :widths: 15, 45, 15
+
+
+	kernel,tuning,GFLOP/s
+	tune-0,as-is,126
+	tune-1,SIMDization,329
+	tune-1a,SIMDization (alt.),321
+	tune-2,cont. access,358
+	tune-3,software pipelining,374
+	tune-4,prefewtch,606
+
+特に高い効果が見られたのが、適切なループ変数による
+SIMD
+化です。また、最後のプリフェッチも高い効果を発揮していますが、これは
+tune-3
+で導入したループ
+collapse
+からの積み重ねで実現できたものでもあります。

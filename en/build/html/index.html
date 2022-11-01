@@ -1,0 +1,733 @@
+
+
+<!doctype html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>Introduction &#8212; Tuning of axhelm kernel 0.00 documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/bizstyle.css" />
+    
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="_static/bizstyle.js"></script>
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Alternative solution (tune-1a)" href="tune-1a.html" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <!--[if lt IE 9]>
+    <script src="_static/css3-mediaqueries.js"></script>
+    <![endif]-->
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="tune-1a.html" title="Alternative solution (tune-1a)"
+             accesskey="N">next</a></li>
+        <li class="nav-item nav-item-0"><a href="#">Tuning of axhelm kernel 0.00 documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Introduction</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <div class="toctree-wrapper compound">
+</div>
+<section id="introduction">
+<h1>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h1>
+<p>This article is a tuning case study for Fugaku, based on a reproduction of a work
+by Dr. Tsuji at RIKEN R-CCS.
+For the original literature, see
+<a class="footnote-reference brackets" href="#id7" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a> (in Japanese) and <a class="footnote-reference brackets" href="#id8" id="id2" role="doc-noteref"><span class="fn-bracket">[</span>2<span class="fn-bracket">]</span></a>.</p>
+<section id="what-it-computes">
+<h2>What it computes<a class="headerlink" href="#what-it-computes" title="Permalink to this heading">¶</a></h2>
+<p>We examine a kernel from “axhelm”, a spectral element method (a family of finite element methods).
+It has 8<sup>3</sup> points in a hexahedron element.
+To be precise, the order is variable, but in this tuning, we fix it to 8, the SIMD length of double precision.</p>
+<p>By multiplying an 8×8 matrix for the vectors of each axis, we have gradients.
+It is a quadruple loop in 8<sup>4</sup> (loop-2a).</p>
+<p>Next, we multiply a 3×3 symmetric matrix of geometry factors.
+This connects the internal coordinates of the element with the external ones, including the waiting by volume and density.
+This part is a triple loop in 8<sup>3</sup>, with a relatively large data fetching of 6×8<sup>3</sup> words (loop-2b).</p>
+<p>Loop-2a and Loop-2b are fused to save space for intermediate variables.
+From these to loop-3, we need storage of
+3×8<sup>3</sup>
+words, which is 12 KiB and fits into the 64 KiB L1 cache.</p>
+<p>Finally, we multiply the transposed matrix of the previous gradients.</p>
+<p>Mathematically, this kernel applies a matrix</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}A=
+\begin{pmatrix}
+D_1 \\ D_2 \\ D_3
+\end{pmatrix}^T
+\begin{pmatrix}
+G_{11} &amp; G_{12} &amp; G_{13} \\
+G_{12} &amp; G_{22} &amp; G_{23} \\
+G_{13} &amp; G_{23} &amp; G_{33}
+\end{pmatrix}
+\begin{pmatrix}
+D_1 \\ D_2 \\ D_3
+\end{pmatrix},\end{split}\]</div>
+<p>from the left to compute
+<span class="math notranslate nohighlight">\(A \vec{u}\)</span>.</p>
+<p>To better clarify the role of multiplying the transposed gradients,
+consider the following inner product</p>
+<div class="math notranslate nohighlight">
+\[(\nabla \vec v, \nabla \vec u) = \vec v^T A \vec u.\]</div>
+<p>The kernel omits the final procedure for multiplying
+<span class="math notranslate nohighlight">\(\vec v^T\)</span>
+from the above.
+For more detailed formulations, see <a class="footnote-reference brackets" href="#id9" id="id3" role="doc-noteref"><span class="fn-bracket">[</span>3<span class="fn-bracket">]</span></a>.</p>
+</section>
+<section id="organizations">
+<h2>Organizations<a class="headerlink" href="#organizations" title="Permalink to this heading">¶</a></h2>
+<p>This article starts with an “as-is” <a class="reference internal" href="#tune-0"><span class="std std-ref">tune-0</span></a>,
+and in <a class="reference internal" href="#tune-1"><span class="std std-ref">tune-1</span></a>,  it improves the SIMD conversion.
+The next <a class="reference internal" href="#tune-2"><span class="std std-ref">tune-2</span></a> avoids gathering instructions
+by making continuous access, and
+<a class="reference internal" href="#tune-3"><span class="std std-ref">tune-3</span></a>
+promotes software pipelining by collapsing loops.
+Finally, in
+<a class="reference internal" href="#tune-4"><span class="std std-ref">tune-4</span></a>,
+we improve the memory access performance by enabling prefetch instruction insertion.
+In <a class="reference internal" href="tune-1a.html#tune-1a"><span class="std std-ref">tune-1a</span></a>,
+an equivalent SIMD conversion to
+<a class="reference internal" href="#tune-1"><span class="std std-ref">tune-1</span></a>
+without using directives is also introduced.</p>
+</section>
+</section>
+<section id="as-is-performance-tune-0">
+<span id="tune-0"></span><h1>As-is performance (tune-0)<a class="headerlink" href="#as-is-performance-tune-0" title="Permalink to this heading">¶</a></h1>
+<p>Below is the baseline code.</p>
+<div class="literal-block-wrapper docutils container" id="id11">
+<div class="code-block-caption"><span class="caption-text">axhelm-0.cpp</span><a class="headerlink" href="#id11" title="Permalink to this code">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 49</span><span class="k">extern</span><span class="w"> </span><span class="s">&quot;C&quot;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">axhelm_bk_v0</span><span class="p">(</span><span class="w"></span>
+<span class="linenos"> 50</span><span class="w">        </span><span class="n">dlong</span><span class="w"> </span><span class="n">Nelements</span><span class="p">,</span><span class="w">                   </span><span class="c1">// dlong=int, dfloat=double</span>
+<span class="linenos"> 51</span><span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">offset</span><span class="p">,</span><span class="w">              </span><span class="c1">// not used    </span>
+<span class="linenos"> 52</span><span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="o">*</span><span class="w"> </span><span class="n">__restrict__</span><span class="w"> </span><span class="n">ggeo</span><span class="p">,</span><span class="w">   </span><span class="c1">// [Nelements][7][8][8][8]</span>
+<span class="linenos"> 53</span><span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="o">*</span><span class="w"> </span><span class="n">__restrict__</span><span class="w"> </span><span class="n">D</span><span class="p">,</span><span class="w">      </span><span class="c1">// [8][8]</span>
+<span class="linenos"> 54</span><span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="o">*</span><span class="w"> </span><span class="n">__restrict__</span><span class="w"> </span><span class="n">lambda</span><span class="p">,</span><span class="w"> </span><span class="c1">// not used</span>
+<span class="linenos"> 55</span><span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="o">*</span><span class="w"> </span><span class="n">__restrict__</span><span class="w"> </span><span class="n">q</span><span class="p">,</span><span class="w">      </span><span class="c1">// [Nelements][8][8][8]</span>
+<span class="linenos"> 56</span><span class="w">        </span><span class="n">dfloat</span><span class="o">*</span><span class="w"> </span><span class="n">__restrict__</span><span class="w"> </span><span class="n">Aq</span><span class="w"> </span><span class="p">)</span><span class="w">          </span><span class="c1">// [Nelements][8][8][8]</span>
+<span class="linenos"> 57</span><span class="p">{</span><span class="w"></span>
+<span class="linenos"> 58</span><span class="w">    </span><span class="n">dfloat</span><span class="w"> </span><span class="n">s_q</span><span class="w">  </span><span class="p">[</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">];</span><span class="w"> </span><span class="c1">// #define p_Nq 8</span>
+<span class="linenos"> 59</span><span class="w">    </span><span class="n">dfloat</span><span class="w"> </span><span class="n">s_Gqr</span><span class="p">[</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 60</span><span class="w">    </span><span class="n">dfloat</span><span class="w"> </span><span class="n">s_Gqs</span><span class="p">[</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 61</span><span class="w">    </span><span class="n">dfloat</span><span class="w"> </span><span class="n">s_Gqt</span><span class="p">[</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 62</span>
+<span class="linenos"> 63</span><span class="w">    </span><span class="n">dfloat</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 64</span>
+<span class="linenos"> 65</span><span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="w"></span>
+<span class="linenos"> 66</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"></span>
+<span class="linenos"> 67</span><span class="w">            </span><span class="n">s_D</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 68</span>
+<span class="linenos"> 69</span><span class="cp">#pragma omp parallel for private(s_q, s_Gqr, s_Gqs, s_Gqt) firstprivate(s_D)</span>
+<span class="linenos"> 70</span><span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="n">dlong</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">Nelements</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos"> 71</span><span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">e</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 72</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">k</span><span class="p">)</span><span class="w"> </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="w"> </span><span class="c1">// loop-1</span>
+<span class="linenos"> 73</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos"> 74</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">base</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 75</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">qbase</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">q</span><span class="p">[</span><span class="n">base</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 76</span><span class="w">                </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">qbase</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 77</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos"> 78</span>
+<span class="linenos"> 79</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">k</span><span class="p">)</span><span class="w"> </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="w"> </span><span class="c1">// loop-2</span>
+<span class="linenos"> 80</span><span class="w">        </span><span class="p">{</span><span class="w"></span>
+<span class="linenos"> 81</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos"> 82</span><span class="w">                </span><span class="c1">// const dlong id = i + j * p_Nq + k * p_Nq * p_Nq + element * p_Np;</span>
+<span class="linenos"> 83</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">gbase</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nggeo</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 84</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G00</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G00ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"> </span><span class="c1">// #define p_G00ID 1</span>
+<span class="linenos"> 85</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G01</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G01ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"> </span><span class="c1">// #define p_G01ID 2</span>
+<span class="linenos"> 86</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G11</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G11ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"> </span><span class="c1">// #define p_G11ID 3</span>
+<span class="linenos"> 87</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G12</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G12ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"> </span><span class="c1">// #define p_G12ID 4</span>
+<span class="linenos"> 88</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G02</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G02ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"> </span><span class="c1">// #define p_G02ID 5</span>
+<span class="linenos"> 89</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G22</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G22ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"> </span><span class="c1">// #define p_G22ID 6</span>
+<span class="linenos"> 90</span>
+<span class="linenos"> 91</span><span class="w">                </span><span class="n">dfloat</span><span class="w"> </span><span class="n">qr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 92</span><span class="w">                </span><span class="n">dfloat</span><span class="w"> </span><span class="n">qs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 93</span><span class="w">                </span><span class="n">dfloat</span><span class="w"> </span><span class="n">qt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 94</span><span class="w">                </span><span class="c1">// loop-2a (gradient)</span>
+<span class="hll"><span class="linenos"> 95</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos"> 96</span><span class="w">                    </span><span class="n">qr</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 97</span><span class="w">                    </span><span class="n">qs</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 98</span><span class="w">                    </span><span class="n">qt</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 99</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">100</span><span class="w">                </span><span class="c1">// loop-2b (geometry factor)</span>
+<span class="linenos">101</span><span class="w">                </span><span class="n">s_Gqr</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r_G00</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G01</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qs</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G02</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qt</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">102</span><span class="w">                </span><span class="n">s_Gqs</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r_G01</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G11</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qs</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G12</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qt</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">103</span><span class="w">                </span><span class="n">s_Gqt</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r_G02</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G12</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qs</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G22</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qt</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">104</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">105</span><span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">106</span>
+<span class="linenos">107</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">k</span><span class="p">)</span><span class="w"> </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="w"> </span><span class="c1">// loop-3 (grad^T)</span>
+<span class="linenos">108</span><span class="w">        </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">109</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">110</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">111</span><span class="w">                </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_Aqr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">r_Aqs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">r_Aqt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">112</span>
+<span class="hll"><span class="linenos">113</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos">114</span><span class="w">                    </span><span class="n">r_Aqr</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqr</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">115</span><span class="w">                    </span><span class="n">r_Aqs</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqs</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">116</span><span class="w">                    </span><span class="n">r_Aqt</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">k</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqt</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">117</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">118</span>
+<span class="linenos">119</span><span class="w">                </span><span class="n">Aq</span><span class="p">[</span><span class="n">id</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r_Aqr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_Aqs</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_Aqt</span><span class="p">;</span><span class="w"> </span>
+<span class="linenos">120</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">121</span><span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">122</span><span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">123</span><span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+</div>
+<p>Compiling with a Fujitsu compiler
+4.8.0 (tcsds-1.2.35)
+in a trad mode with options
+<code class="docutils literal notranslate"><span class="pre">-Kfast,openmp,ocl,optmsg=2</span></code>,
+and running at a 2.0 GHz frequency results in
+a performance of <strong>126 GFLOP/s</strong> per node.</p>
+<p>We use a standard combination of numbers, 4 MPI processes per node, and 12 threads per process.
+The problem size is 7680 elements.
+The GFLOP/s number is calculated by the program from the theoretical operation count
+and can differ from what the profiler outputs.</p>
+<p>Let us first examine SIMD conversion.</p>
+</section>
+<section id="simd-conversion-tune-1">
+<span id="tune-1"></span><h1>SIMD conversion (tune-1)<a class="headerlink" href="#simd-conversion-tune-1" title="Permalink to this heading">¶</a></h1>
+<p>In the last code, the compiler outputs the following optimization messages (excerpt):</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>       jwd8222o-i  &quot;axhelm-0.cpp&quot;, line 78: The prefetch instructions were generated because the number of prefetch required in this loop is greater than the allowable number of hardware-prefetch.
+       jwd8662o-i  &quot;axhelm-0.cpp&quot;, line 78: This loop is not software pipelined because no schedule is obtained.
+       jwd8203o-i  &quot;axhelm-0.cpp&quot;, line 80: Loop full unrolling is applied to this loop.
+<span class="hll">       jwd6004s-i  &quot;axhelm-0.cpp&quot;, line 94: SIMD conversion is applied to this loop with the loop variable &#39;m&#39;. The loop contains a reduction operation.
+</span>       jwd8209o-i  &quot;axhelm-0.cpp&quot;, line 100: Evaluation order of polynomial expression is changed according to commutative law of addition and multiplication.
+       jwd8668o-i  &quot;axhelm-0.cpp&quot;, line 106: This loop is not software pipelined because the loop contains too many instructions.
+       jwd8203o-i  &quot;axhelm-0.cpp&quot;, line 106: Loop full unrolling is applied to this loop.
+       jwd8203o-i  &quot;axhelm-0.cpp&quot;, line 108: Loop full unrolling is applied to this loop.
+<span class="hll">       jwd6004s-i  &quot;axhelm-0.cpp&quot;, line 112: SIMD conversion is applied to this loop with the loop variable &#39;m&#39;. The loop contains a reduction operation.
+</span></pre></div>
+</div>
+<p>We can see that the compiler applies SIMD conversion for the innermost loop index <code class="docutils literal notranslate"><span class="pre">m</span></code>.
+Although vectorization for the innermost loop is standard behavior for most compiles,
+this is not an optimal SIMD conversion for the following reasons.</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>One multiplication and one horizontal summation instruction are needed for a dot product
+calculation of vectors with length 8. This is not efficient
+(if the vector length is sufficiently long, only one horizontal summation is needed
+after several SIMD multiply-add operations, and it is adequate).</p></li>
+<li><p>SIMD conversion is only applied for the gradient calculation part,
+and no SIMD instruction is used for the geometry factor part.</p></li>
+</ul>
+</div></blockquote>
+<p>For this reason, we focus on applying SIMD conversion, not for the innermost loop index <code class="docutils literal notranslate"><span class="pre">m</span></code>,
+but one more outer loop index <code class="docutils literal notranslate"><span class="pre">i</span></code>.
+A simple way to do this is to unroll the innermost m-loop.
+Fortunately, a compiler directive is available for this purpose,
+and we do not need to hand-unroll it.
+A modified loop writes:</p>
+<div class="literal-block-wrapper docutils container" id="id12">
+<div class="code-block-caption"><span class="caption-text">axhelm-1.cpp</span><a class="headerlink" href="#id12" title="Permalink to this code">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos">94</span><span class="cp">#pragma loop fullunroll_pre_simd</span>
+<span class="linenos">95</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">96</span><span class="w">                    </span><span class="n">qr</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">97</span><span class="w">                    </span><span class="n">qs</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">98</span><span class="w">                    </span><span class="n">qt</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">99</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+</div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos">113</span><span class="cp">#pragma loop fullunroll_pre_simd</span>
+<span class="linenos">114</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">115</span><span class="w">                    </span><span class="n">r_Aqr</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqr</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">116</span><span class="w">                    </span><span class="n">r_Aqs</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqs</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">117</span><span class="w">                    </span><span class="n">r_Aqt</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">k</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqt</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">118</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>For these two parts,
+the compiler first unrolls the innermost m-loops,
+then applies SIMD conversion for the outer i-loops.
+The compiler message is as follows.</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>  jwd8203o-i  &quot;axhelm-1.cpp&quot;, line 71: Loop full unrolling is applied to this loop.
+  jwd6001s-i  &quot;axhelm-1.cpp&quot;, line 72: SIMD conversion is applied to this loop with the loop variable &#39;i&#39;.
+  jwd8668o-i  &quot;axhelm-1.cpp&quot;, line 78: This loop is not software pipelined because the loop contains too many instructions.
+  jwd8203o-i  &quot;axhelm-1.cpp&quot;, line 78: Loop full unrolling is applied to this loop.
+<span class="hll">  jwd6001s-i  &quot;axhelm-1.cpp&quot;, line 80: SIMD conversion is applied to this loop with the loop variable &#39;i&#39;.
+</span><span class="hll">  jwd8203o-i  &quot;axhelm-1.cpp&quot;, line 95: Loop full unrolling is applied to this loop.
+</span>  jwd8662o-i  &quot;axhelm-1.cpp&quot;, line 107: This loop is not software pipelined because no schedule is obtained.
+  jwd8203o-i  &quot;axhelm-1.cpp&quot;, line 107: Loop full unrolling is applied to this loop.
+<span class="hll">  jwd6001s-i  &quot;axhelm-1.cpp&quot;, line 109: SIMD conversion is applied to this loop with the loop variable &#39;i&#39;.
+</span><span class="hll">  jwd8203o-i  &quot;axhelm-1.cpp&quot;, line 114: Loop full unrolling is applied to this loop.
+</span></pre></div>
+</div>
+<p>This change yields a performance of
+<strong>329 GFLOP/s</strong>.</p>
+<p>An equivalent SIMD conversion without directives is described in
+<a class="reference internal" href="tune-1a.html#tune-1a"><span class="std std-ref">Alternative solution (tune-1a)</span></a>.</p>
+<p>Here is a comparison of statistics and time breakdown
+with <a class="reference internal" href="#tune-0"><span class="std std-ref">tune-0</span></a>
+by Fujitsu Advanced Performance Profiler (FAPP).
+The statistics per CMG (1 MPI process, 12 threads) are as follows.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Statistics</p></th>
+<th class="head"><div class="line-block">
+<div class="line">Execution</div>
+<div class="line">time (s)</div>
+</div>
+</th>
+<th class="head"><p>Gflops</p></th>
+<th class="head"><div class="line-block">
+<div class="line">Floating-</div>
+<div class="line">point</div>
+<div class="line">operation</div>
+<div class="line">peak  ratio</div>
+<div class="line">(%)</div>
+</div>
+</th>
+<th class="head"><div class="line-block">
+<div class="line">Memory</div>
+<div class="line">throughput</div>
+<div class="line">(GB/s)</div>
+</div>
+</th>
+<th class="head"><div class="line-block">
+<div class="line">Memory</div>
+<div class="line">throughput</div>
+<div class="line">peak ratio</div>
+<div class="line">(%)</div>
+</div>
+</th>
+<th class="head"><div class="line-block">
+<div class="line">Effective</div>
+<div class="line">instruction</div>
+</div>
+</th>
+<th class="head"><div class="line-block">
+<div class="line">Floating-</div>
+<div class="line">point</div>
+<div class="line">operation</div>
+</div>
+</th>
+<th class="head"><div class="line-block">
+<div class="line">SIMD</div>
+<div class="line">instruction</div>
+<div class="line">rate (%)</div>
+<div class="line">(/Effective</div>
+<div class="line">instruction)</div>
+</div>
+</th>
+<th class="head"><div class="line-block">
+<div class="line">SVE</div>
+<div class="line">operation</div>
+<div class="line">rate (%)</div>
+</div>
+</th>
+<th class="head"><div class="line-block">
+<div class="line">Floating-</div>
+<div class="line">point</div>
+<div class="line">pipeline</div>
+<div class="line">Active</div>
+<div class="line">element rate</div>
+</div>
+</th>
+<th class="head"><p>IPC</p></th>
+<th class="head"><p>GIPS</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Tune-0</p></td>
+<td><p>3.13E-01</p></td>
+<td><p>65.71</p></td>
+<td><p>8.56%</p></td>
+<td><p>24.95</p></td>
+<td><p>9.75%</p></td>
+<td><p>7.97E+09</p></td>
+<td><p>2.05E+10</p></td>
+<td><p>57.06%</p></td>
+<td><p>91.87%</p></td>
+<td><p>92.29%</p></td>
+<td><p>1.06</p></td>
+<td><p>25.50</p></td>
+</tr>
+<tr class="row-odd"><td><p>Tune-1</p></td>
+<td><p>1.09E-01</p></td>
+<td><p>96.30</p></td>
+<td><p>12.54%</p></td>
+<td><p>70.31</p></td>
+<td><p>27.42%</p></td>
+<td><p>2.08E+09</p></td>
+<td><p>1.05E+10</p></td>
+<td><p>75.41%</p></td>
+<td><p>100.0%</p></td>
+<td><p>91.77%</p></td>
+<td><p>0.79</p></td>
+<td><p>19.06</p></td>
+</tr>
+</tbody>
+</table>
+<p>Execution time is the most objective indicator and is reduced by almost one-third.
+The increase in Gflops number is relatively moderate.
+This is because <a class="reference internal" href="#tune-0"><span class="std std-ref">tune-0</span></a> counts more floating-point operations than it should
+due to the horizontal summation instruction.
+The number of floating-point operations in the subsequent tunings below does not increase or reduce.
+As a whole, reducing the number of instructions by the SIMD conversion of almost all
+floating-point operations in <a class="reference internal" href="#tune-1"><span class="std std-ref">tune-1</span></a>
+contributes to decreasing total execution time.</p>
+<p>Breakdowns of execution times are as follows.</p>
+<figure class="align-default" id="id13">
+<a class="reference internal image-reference" href="_images/tune0_035.png"><img alt="_images/tune0_035.png" src="_images/tune0_035.png" style="width: 640px;" /></a>
+<figcaption>
+<p><span class="caption-text">Breakdown of tune-0</span><a class="headerlink" href="#id13" title="Permalink to this image">¶</a></p>
+</figcaption>
+</figure>
+<figure class="align-default" id="id14">
+<a class="reference internal image-reference" href="_images/tune1_035.png"><img alt="_images/tune1_035.png" src="_images/tune1_035.png" style="width: 640px;" /></a>
+<figcaption>
+<p><span class="caption-text">Breakdown of tune-1</span><a class="headerlink" href="#id14" title="Permalink to this image">¶</a></p>
+</figcaption>
+</figure>
+<p>So far, we have seen that the reduction in the total operation count has reduced execution time.
+However, there remains several rooms for improvement in <a class="reference internal" href="#tune-1"><span class="std std-ref">tune-1</span></a></p>
+<blockquote>
+<div><ul class="simple">
+<li><p>Light purple-colored “floating-point operation wait” time occupies a significant fraction of the total time.
+Compiler-based scheduling, like <strong>software pipelining</strong>, can improve this (<a class="reference internal" href="#tune-3"><span class="std std-ref">tune-3</span></a>).</p></li>
+<li><p>Red colored “floating-point load memory access wait” has also a certain fraction in the total execution time.
+Ultimately, this kernel will end up with a memory-bound problem. However, the current memory busy rate is only 24.42%.
+Insertion of <strong>software prefetch</strong> may improve this part (<a class="reference internal" href="#tune-4"><span class="std std-ref">tune-4</span></a>).</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="avoid-gathering-by-continuous-access-tune-2">
+<span id="tune-2"></span><h1>Avoid gathering by continuous access (tune-2)<a class="headerlink" href="#avoid-gathering-by-continuous-access-tune-2" title="Permalink to this heading">¶</a></h1>
+<p>In the previous SIMD conversion, some inefficient memory access remain.</p>
+<div class="literal-block-wrapper docutils container" id="id15">
+<div class="code-block-caption"><span class="caption-text">axhelm-1.cpp</span><a class="headerlink" href="#id15" title="Permalink to this code">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos">95</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="hll"><span class="linenos">96</span><span class="w">                    </span><span class="n">qr</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+</span><span class="linenos">97</span><span class="w">                    </span><span class="n">qs</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">98</span><span class="w">                    </span><span class="n">qt</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">99</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+</div>
+<p>This is a vectorization on the index <code class="docutils literal notranslate"><span class="pre">[i]</span></code>,
+so the first line is a vector-scalar multiplication, and the other two lines are scalar-vector multiplication.
+The array <code class="docutils literal notranslate"><span class="pre">s_D[i][m]</span></code> in the first line includes the index <code class="docutils literal notranslate"><span class="pre">[i]</span></code> and can be vectorized.
+However, the index resides not the innermost, resulting in a stride or gathering memory access.
+The gather load instruction can be found from the compiler output as:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>/*     96 */    index   z17.d, 0, 8
+/*     96 */    ld1d    {z16.d}, p0/z, [x16, z17.d, lsl #3]     //  &quot;s_D&quot;
+</pre></div>
+</div>
+<p>Without reading an assembly output, one can also check the issues of gathering instructions from a FAPP report.</p>
+<figure class="align-default" id="id16">
+<a class="reference internal image-reference" href="_images/tune1_xls.png"><img alt="_images/tune1_xls.png" src="_images/tune1_xls.png" style="width: 500px;" /></a>
+<figcaption>
+<p><span class="caption-text">FAPP report for tune-1</span><a class="headerlink" href="#id16" title="Permalink to this image">¶</a></p>
+</figcaption>
+</figure>
+<p>Fortunately, this matrix is tiny, 8×8, and shared for all elements.
+Thus, we can prepare a transposed matrix at the function’s entry.
+The following are code changes for such tuning.</p>
+<div class="literal-block-wrapper docutils container" id="id17">
+<div class="code-block-caption"><span class="caption-text">axhelm-2.cpp</span><a class="headerlink" href="#id17" title="Permalink to this code">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos">62</span><span class="w">    </span><span class="n">dfloat</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">],</span><span class="w"> </span><span class="n">s_T</span><span class="p">[</span><span class="n">p_Nq</span><span class="p">][</span><span class="n">p_Nq</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">63</span>
+<span class="linenos">64</span><span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="w"></span>
+<span class="linenos">65</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">){</span><span class="w"></span>
+<span class="linenos">66</span><span class="w">            </span><span class="n">s_D</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="hll"><span class="linenos">67</span><span class="w">            </span><span class="n">s_T</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+</span><span class="linenos">68</span><span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">69</span>
+<span class="linenos">70</span><span class="cp">#pragma omp parallel for private(s_q, s_Gqr, s_Gqs, s_Gqt) firstprivate(s_D, s_T)</span>
+</pre></div>
+</div>
+</div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 97</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="hll"><span class="linenos"> 98</span><span class="w">                    </span><span class="n">qr</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_T</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+</span><span class="linenos"> 99</span><span class="w">                    </span><span class="n">qs</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">100</span><span class="w">                    </span><span class="n">qt</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">101</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>A new array <code class="docutils literal notranslate"><span class="pre">s_T[i][j]</span></code> contains a transpose of the original matrix <code class="docutils literal notranslate"><span class="pre">s_D[j][i]</span></code>.
+This change yeelded a performance of <strong>358 GFLOPS/s</strong>
+(+8.8% from <a class="reference internal" href="#tune-1"><span class="std std-ref">tune-1</span></a>).</p>
+</section>
+<section id="software-pipelining-by-loop-collapsing-tune-3">
+<span id="tune-3"></span><h1>Software pipelining by loop collapsing (tune-3)<a class="headerlink" href="#software-pipelining-by-loop-collapsing-tune-3" title="Permalink to this heading">¶</a></h1>
+<p>The inner i-loop with the SIMD length 8 is efficiently vectorized.
+Now we focus on one outer j-loop for better instruction scheduling, like software pipelining.
+The j-loop has a fixed size of 8, known at the compile time.
+Thus, for the current version, the compiler applies full unrolling of the j-loop.
+For the k-loop, the compiler gives no modification because its loop body is big enough.</p>
+<p>Here, we <em>collapse</em> the j-loop and k-loop to generate a single loop with a length of 64
+to improve the scheduling.
+OpenMP supports loop collapsing for cases where the length of the outermost loop is not long enough for
+thread parallelization.
+Still, there seems to be no directive for loop collapsing without thread
+parallelization.
+We do it by hand.</p>
+<div class="literal-block-wrapper docutils container" id="id18">
+<div class="code-block-caption"><span class="caption-text">axhelm-3.cpp</span><a class="headerlink" href="#id18" title="Permalink to this code">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos">84</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="o">*</span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">kj</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">85</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">86</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+</div>
+<p>The same change is applied for three parts, and the compiler messages are:</p>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span><span class="hll">  jwd8204o-i  &quot;axhelm-3.cpp&quot;, line 73: This loop is software pipelined.
+</span><span class="hll">  jwd8205o-i  &quot;axhelm-3.cpp&quot;, line 73: The software-pipelined loop is chosen at run time when the iteration count is greater than or equal to 64.
+</span>  jwd6001s-i  &quot;axhelm-3.cpp&quot;, line 77: SIMD conversion is applied to this loop with the loop variable &#39;i&#39;.
+<span class="hll">  jwd8204o-i  &quot;axhelm-3.cpp&quot;, line 84: This loop is software pipelined.
+</span><span class="hll">  jwd8205o-i  &quot;axhelm-3.cpp&quot;, line 84: The software-pipelined loop is chosen at run time when the iteration count is greater than or equal to 48.
+</span>  jwd6001s-i  &quot;axhelm-3.cpp&quot;, line 88: SIMD conversion is applied to this loop with the loop variable &#39;i&#39;.
+  jwd8203o-i  &quot;axhelm-3.cpp&quot;, line 103: Loop full unrolling is applied to this loop.
+<span class="hll">  jwd8204o-i  &quot;axhelm-3.cpp&quot;, line 115: This loop is software pipelined.
+</span><span class="hll">  jwd8205o-i  &quot;axhelm-3.cpp&quot;, line 115: The software-pipelined loop is chosen at run time when the iteration count is greater than or equal to 48.
+</span>  jwd6001s-i  &quot;axhelm-3.cpp&quot;, line 119: SIMD conversion is applied to this loop with the loop variable &#39;i&#39;.
+  jwd8203o-i  &quot;axhelm-3.cpp&quot;, line 124: Loop full unrolling is applied to this loop.
+</pre></div>
+</div>
+<p>This modification resulted in
+<strong>374 GFLOP/s</strong>
+(+4.5% from <a class="reference internal" href="#tune-2"><span class="std std-ref">tune-2</span></a>).</p>
+<p>Let us compare the FAPP report with <a class="reference internal" href="#tune-2"><span class="std std-ref">tune-2</span></a>.</p>
+<figure class="align-default" id="id19">
+<a class="reference internal image-reference" href="_images/tune2_09.png"><img alt="_images/tune2_09.png" src="_images/tune2_09.png" style="width: 640px;" /></a>
+<figcaption>
+<p><span class="caption-text">Breakdown of tune-2</span><a class="headerlink" href="#id19" title="Permalink to this image">¶</a></p>
+</figcaption>
+</figure>
+<figure class="align-default" id="id20">
+<a class="reference internal image-reference" href="_images/tune3_09.png"><img alt="_images/tune3_09.png" src="_images/tune3_09.png" style="width: 640px;" /></a>
+<figcaption>
+<p><span class="caption-text">Breakdown of tune-3</span><a class="headerlink" href="#id20" title="Permalink to this image">¶</a></p>
+</figcaption>
+</figure>
+<p>At a glance, the light purple-colored “Floating-point operation wait” is much reduced,
+but we have more blue-colored “4 instruction commit” instead,
+resulting in a slight improvement in the total time.
+This is due to the increased integer instructions in the software pipelined version.
+For example, the IPC number changes to 1.01→2.01, and the GIPS number per core 2.03→4.02,
+that is, one more instruction for every CPU cycle.
+This does not mean that the increase of the integer instruction canceled the
+improvement by the software pipelining.
+Still, the density of floating-point operations increases slightly
+with the concurrent execution of the additional integer instructions.</p>
+<p>The limited scheduling improvement is because
+full unrolling has already been performed on the loop variable
+<code class="docutils literal notranslate"><span class="pre">j</span></code> for its fixed length 8 in <a class="reference internal" href="#tune-1"><span class="std std-ref">tune-1</span></a>,
+and moderate scheduling has already been available.
+Although the performance gain in this tuning is limited,
+the loop collapse introduced here is essential
+in the subsequent tuning.</p>
+</section>
+<section id="enabling-software-prefetch-tune-4">
+<span id="tune-4"></span><h1>Enabling software prefetch (tune-4)<a class="headerlink" href="#enabling-software-prefetch-tune-4" title="Permalink to this heading">¶</a></h1>
+<p>A redundant address calclation remains in the code up to this point.</p>
+<div class="literal-block-wrapper docutils container" id="id21">
+<div class="code-block-caption"><span class="caption-text">axhelm-3.cpp</span><a class="headerlink" href="#id21" title="Permalink to this code">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos">84</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="o">*</span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">kj</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">85</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">86</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">87</span>
+<span class="linenos">88</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">89</span><span class="w">                </span><span class="c1">// const dlong id = i + j * p_Nq + k * p_Nq * p_Nq + element * p_Np;</span>
+<span class="hll"><span class="linenos">90</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">gbase</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nggeo</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"></span>
+</span><span class="linenos">91</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G00</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G00ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">92</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G01</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G01ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">93</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G11</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G11ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">94</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G12</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G12ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">95</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G02</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G02ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">96</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G22</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G22ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+</pre></div>
+</div>
+</div>
+<p>Here, <code class="docutils literal notranslate"><span class="pre">ggeo</span></code> corresponds to a multidimensional array <code class="docutils literal notranslate"><span class="pre">double</span> <span class="pre">ggeo[Nelements][7][512]</span></code> (<code class="docutils literal notranslate"><span class="pre">p_Np=512</span></code>).
+After the loops are collapsed, the address can be directly calculated from the loop variable <code class="docutils literal notranslate"><span class="pre">kj</span></code>
+(since <code class="docutils literal notranslate"><span class="pre">k</span> <span class="pre">*</span> <span class="pre">p_Nq</span> <span class="pre">*</span> <span class="pre">p_Nq</span> <span class="pre">+</span> <span class="pre">j</span> <span class="pre">*</span> <span class="pre">p_Nq</span> <span class="pre">==</span> <span class="pre">kj</span> <span class="pre">*</span> <span class="pre">p_Nq</span></code>).</p>
+<div class="literal-block-wrapper docutils container" id="id22">
+<div class="code-block-caption"><span class="caption-text">axhelm-4.cpp</span><a class="headerlink" href="#id22" title="Permalink to this code">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos">84</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="o">*</span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">kj</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">85</span><span class="w">                        </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">86</span><span class="w">                        </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">87</span>
+<span class="linenos">88</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="linenos">89</span><span class="w">                </span><span class="c1">// const dlong id = i + j * p_Nq + k * p_Nq * p_Nq + element * p_Np;</span>
+<span class="hll"><span class="linenos">90</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">gbase</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nggeo</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">kj</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"></span>
+</span></pre></div>
+</div>
+</div>
+<p>Although It appears to be a tiny saving in integer operations,
+the performance is significant, reaching <strong>606 GFLOP/s</strong> (+62% from <a class="reference internal" href="#tune-3"><span class="std std-ref">tune-3</span></a>).
+This is because the address calculation becomes just linear to the loop variable <code class="docutils literal notranslate"><span class="pre">kj</span></code>,
+enabling the compiler to output software prefetch instructions.
+This time, we could not find any report for the insertion of the prefetch instructions
+from the optimization message of the compiler, but it can be confirmed from the assembly output.</p>
+<div class="literal-block-wrapper docutils container" id="id23">
+<div class="code-block-caption"><span class="caption-text">Excerpt from “$ grep -n prfm axhelm-4.s”</span><a class="headerlink" href="#id23" title="Permalink to this code">¶</a></div>
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>     1313:/*     91 */       prfm    2, [x30, 824]  // PLDL2KEEP for 00010
+     1320:/*     91 */       prfm    0, [x30, 312]  // PLDL1KEEP for 00000
+     4324:/*    130 */       prfm    18, [x12, 760] // PSTL2KEEP for 10010
+     4325:/*    130 */       prfm    16, [x12, 248] // PSTL1KEEP for 10000
+</pre></div>
+</div>
+</div>
+<p>For the detail of the instructions, see <a class="footnote-reference brackets" href="#id10" id="id4" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a>.</p>
+<p>In the original literature <a class="footnote-reference brackets" href="#id7" id="id5" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a> <a class="footnote-reference brackets" href="#id8" id="id6" role="doc-noteref"><span class="fn-bracket">[</span>2<span class="fn-bracket">]</span></a>,
+prefetch instructions were manually inserted in the final stage of tunings,
+while the compiler inserts them in this version.</p>
+<p>The FAPP report for this version is as follows.</p>
+<figure class="align-default" id="id24">
+<a class="reference internal image-reference" href="_images/tune4_09.png"><img alt="_images/tune4_09.png" src="_images/tune4_09.png" style="width: 640px;" /></a>
+<figcaption>
+<p><span class="caption-text">Breakdown of tune-4</span><a class="headerlink" href="#id24" title="Permalink to this image">¶</a></p>
+</figcaption>
+</figure>
+<p>The red-colored memory waiting time is improved.
+Also, memory busy time (red vertical bar on the left)
+is reduced to below 3.0E-02, indicating that memory accesses
+are reduced due to prefetching.</p>
+</section>
+<hr class="docutils" />
+<section id="summary">
+<h1>Summary<a class="headerlink" href="#summary" title="Permalink to this heading">¶</a></h1>
+<p>Below are the kernels, tunings used, and their performances.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 23.1%" />
+<col style="width: 53.8%" />
+<col style="width: 23.1%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><p>Kernel</p></td>
+<td><p>Tuning</p></td>
+<td><p>GFLOP/s</p></td>
+</tr>
+<tr class="row-even"><td><p>tune-0</p></td>
+<td><p>as-is</p></td>
+<td><p>126</p></td>
+</tr>
+<tr class="row-odd"><td><p>tune-1</p></td>
+<td><p>SIMD conversion</p></td>
+<td><p>329</p></td>
+</tr>
+<tr class="row-even"><td><p>tune-1a</p></td>
+<td><p>SIMD (alternative)</p></td>
+<td><p>321</p></td>
+</tr>
+<tr class="row-odd"><td><p>tune-2</p></td>
+<td><p>Continuous access</p></td>
+<td><p>358</p></td>
+</tr>
+<tr class="row-even"><td><p>tune-3</p></td>
+<td><p>Software pipelining</p></td>
+<td><p>374</p></td>
+</tr>
+<tr class="row-odd"><td><p>tune-4</p></td>
+<td><p>Prefetch</p></td>
+<td><p>606</p></td>
+</tr>
+</tbody>
+</table>
+<p>The most significant improvement was achieved in the first tuning;
+SIMD conversion in an adequate loop index.
+The final tuning enabling the compiler prefetching is also highly effective,
+which owes to the loop collapsing in <a class="reference internal" href="#tune-3"><span class="std std-ref">tune-3</span></a>.</p>
+</section>
+<section id="references">
+<h1>References<a class="headerlink" href="#references" title="Permalink to this heading">¶</a></h1>
+<aside class="footnote-list brackets">
+<aside class="footnote brackets" id="id7" role="note">
+<span class="label"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></span>
+<span class="backrefs">(<a role="doc-backlink" href="#id1">1</a>,<a role="doc-backlink" href="#id5">2</a>)</span>
+<p>辻，佐藤 (2021) 『A64FX に向けたNeK CFD solverにおける axhelm カーネルの最適化と評価』 <a class="reference external" href="http://id.nii.ac.jp/1001/00214101">http://id.nii.ac.jp/1001/00214101</a></p>
+</aside>
+<aside class="footnote brackets" id="id8" role="note">
+<span class="label"><span class="fn-bracket">[</span>2<span class="fn-bracket">]</span></span>
+<span class="backrefs">(<a role="doc-backlink" href="#id2">1</a>,<a role="doc-backlink" href="#id6">2</a>)</span>
+<p>Tsuji <em>et al</em>. (2022) “Performance tuning of the Helmholtz matrix-vector product kernel in the computational fluid dynamics solver Nek5000/RS for the A64FX processor” <a class="reference external" href="https://doi.org/10.1145/3503470.3503476">https://doi.org/10.1145/3503470.3503476</a></p>
+</aside>
+<aside class="footnote brackets" id="id9" role="note">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id3">3</a><span class="fn-bracket">]</span></span>
+<p>Fischer <em>et al</em>. (2021) “NekRS, a GPU-Accelerated Spectral Element Navier-Stokes Solver” <a class="reference external" href="https://arxiv.org/abs/2104.05829">https://arxiv.org/abs/2104.05829</a></p>
+</aside>
+<aside class="footnote brackets" id="id10" role="note">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id4">4</a><span class="fn-bracket">]</span></span>
+<p>Arm A-profile A64 Instruction Set Architecture <a class="reference external" href="https://developer.arm.com/documentation/ddi0602/2022-09/Base-Instructions/PRFM--immediate---Prefetch-Memory--immediate--?lang=en">PRFM (immidiate)</a></p>
+</aside>
+</aside>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="#">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Introduction</a><ul>
+<li><a class="reference internal" href="#what-it-computes">What it computes</a></li>
+<li><a class="reference internal" href="#organizations">Organizations</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#as-is-performance-tune-0">As-is performance (tune-0)</a></li>
+<li><a class="reference internal" href="#simd-conversion-tune-1">SIMD conversion (tune-1)</a></li>
+<li><a class="reference internal" href="#avoid-gathering-by-continuous-access-tune-2">Avoid gathering by continuous access (tune-2)</a></li>
+<li><a class="reference internal" href="#software-pipelining-by-loop-collapsing-tune-3">Software pipelining by loop collapsing (tune-3)</a></li>
+<li><a class="reference internal" href="#enabling-software-prefetch-tune-4">Enabling software prefetch (tune-4)</a></li>
+<li><a class="reference internal" href="#summary">Summary</a></li>
+<li><a class="reference internal" href="#references">References</a></li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="tune-1a.html"
+                          title="next chapter">Alternative solution (tune-1a)</a></p>
+  </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="tune-1a.html" title="Alternative solution (tune-1a)"
+             >next</a></li>
+        <li class="nav-item nav-item-0"><a href="#">Tuning of axhelm kernel 0.00 documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Introduction</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright 2022, RIKEN R-CCS.
+    </div>
+  </body>
+</html>

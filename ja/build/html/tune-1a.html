@@ -1,0 +1,161 @@
+
+
+<!doctype html>
+
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>別解 (tune-1a) &#8212; axhelmカーネルのチューニング 0.00 ドキュメント</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/bizstyle.css" />
+    
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script src="_static/translations.js"></script>
+    <script src="_static/bizstyle.js"></script>
+    <link rel="search" title="検索" href="search.html" />
+    <link rel="prev" title="はじめに" href="index.html" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <!--[if lt IE 9]>
+    <script src="_static/css3-mediaqueries.js"></script>
+    <![endif]-->
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>ナビゲーション</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="index.html" title="はじめに"
+             accesskey="P">前へ</a></li>
+        <li class="nav-item nav-item-0"><a href="index.html">axhelmカーネルのチューニング 0.00 ドキュメント</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">別解 (tune-1a)</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="tune-1a">
+<span id="id1"></span><h1>別解 (tune-1a)<a class="headerlink" href="#tune-1a" title="この見出しへのパーマリンク">¶</a></h1>
+<p>ディレクティブを用いずにほぼ同じ
+i-loop
+に対するコンパイラ
+SIMD
+化を実現するには、次のようにループを分割しループの順序を入れ替えるという書き方もあります。コードの変更量は大きくなりますが他に応用の効くかもしれない手法でもありここで紹介しておきます。</p>
+<div class="literal-block-wrapper docutils container" id="id2">
+<div class="code-block-caption"><span class="caption-text">axhelm-1a.cpp</span><a class="headerlink" href="#id2" title="このコードへのパーマリンク">¶</a></div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 79</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="w"></span>
+<span class="linenos"> 80</span><span class="w">        </span><span class="p">{</span><span class="w"></span>
+<span class="hll"><span class="linenos"> 81</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos"> 82</span><span class="w">                </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 83</span><span class="w">                </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 84</span><span class="w">                </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 85</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos"> 86</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="hll"><span class="linenos"> 87</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos"> 88</span><span class="w">                    </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 89</span><span class="w">                    </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 90</span><span class="w">                    </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_q</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 91</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+<span class="linenos"> 92</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos"> 93</span>
+<span class="hll"><span class="linenos"> 94</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos"> 95</span><span class="w">                </span><span class="c1">// const dlong id = i + j * p_Nq + k * p_Nq * p_Nq + element * p_Np;</span>
+<span class="linenos"> 96</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">gbase</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nggeo</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"></span>
+<span class="linenos"> 97</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G00</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G00ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 98</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G01</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G01ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos"> 99</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G11</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G11ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">100</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G12</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G12ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">101</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G02</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G02ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">102</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dfloat</span><span class="w"> </span><span class="n">r_G22</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ggeo</span><span class="p">[</span><span class="n">gbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">p_G22ID</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">103</span>
+<span class="linenos">104</span><span class="w">                </span><span class="n">s_Gqr</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r_G00</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G01</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G02</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">105</span><span class="w">                </span><span class="n">s_Gqs</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r_G01</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G11</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G12</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">106</span><span class="w">                </span><span class="n">s_Gqt</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r_G02</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G12</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">r_G22</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">107</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">108</span><span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">109</span>
+<span class="linenos">110</span><span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">k</span><span class="p">)</span><span class="w"> </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="w"></span>
+<span class="linenos">111</span><span class="w">        </span><span class="p">{</span><span class="w"></span>
+<span class="hll"><span class="linenos">112</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos">113</span><span class="w">                </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">114</span><span class="w">                </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">115</span><span class="w">                </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.f</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">116</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">117</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="hll"><span class="linenos">118</span><span class="w">                </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos">119</span><span class="w">                    </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqr</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">m</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">120</span><span class="w">                    </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqs</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">m</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">121</span><span class="w">                    </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">s_D</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">k</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">s_Gqt</span><span class="p">[</span><span class="n">m</span><span class="p">][</span><span class="n">j</span><span class="p">][</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">122</span><span class="w">                </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">123</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="hll"><span class="linenos">124</span><span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">p_Nq</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+</span><span class="linenos">125</span><span class="w">                </span><span class="k">const</span><span class="w"> </span><span class="n">dlong</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Np</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">p_Nq</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"></span>
+<span class="linenos">126</span><span class="w">                </span><span class="n">Aq</span><span class="p">[</span><span class="n">id</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">qr</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">qs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">qt</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w"></span>
+<span class="linenos">127</span><span class="w">            </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">128</span><span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">129</span><span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="linenos">130</span><span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+</div>
+<p>i-loop
+が
+3
+分割されその真中のブロックが
+m-loop
+の内側に入っていること、スカラ変数だった
+<code class="docutils literal notranslate"><span class="pre">qr,</span> <span class="pre">qs,</span> <span class="pre">qt</span></code>
+が長さ8の配列に変更されていることに注意してください。</p>
+<p>このバージョンでは上述の方法と完全に同一の結果とまではならなかったのですが
+<strong>321 GFLOP/s</strong>
+が得られています。</p>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h4>前のトピックへ</h4>
+    <p class="topless"><a href="index.html"
+                          title="前の章へ">はじめに</a></p>
+  </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">クイック検索</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="検索" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>ナビゲーション</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="index.html" title="はじめに"
+             >前へ</a></li>
+        <li class="nav-item nav-item-0"><a href="index.html">axhelmカーネルのチューニング 0.00 ドキュメント</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">別解 (tune-1a)</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright 2022, RIKEN R-CCS.
+    </div>
+  </body>
+</html>
