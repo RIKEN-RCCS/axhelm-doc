@@ -11,10 +11,11 @@ pages:
   - make -C en html
   - ls ja/build/html
   - ls en/build/html
-  - mv ja/build/html public/ja
-  - mv en/build/html public/en
+  - mv ja/build/html public/ja/
+  - mv en/build/html public/en/
   artifacts:
     paths:
-    - public
+    - public/ja
+    - public/en
   only:
   - main
