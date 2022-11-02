@@ -1,17 +1,16 @@
-image: python:3.7
+image: sphinxdoc/sphinx-latexpdf:latest
 stages:
   - pages
 
 pages:
   stage: pages
   script:
-  - pip install sphinx
-  - pip install sphinxcontrib-blockdiag sphinxcontrib-nwdiag sphinx_rtd_theme
   - make -C ja html
   - make -C en html
-  - ls ja/build/html
-  - ls en/build/html
-  - mv en/build/html/ public/
+  - mkdir .public
+  - mv ja/html .public/ja
+  - mv en/html .public/en
+  - mv .public public
   artifacts:
     paths:
     - public
