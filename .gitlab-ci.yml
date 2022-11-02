@@ -8,8 +8,8 @@ pages:
   - make -C ja html
   - make -C en html
   - mkdir .public
-  - mv ja/html .public/ja
-  - mv en/html .public/en
+  - mv ja/build/html .public/ja
+  - mv en/build/html .public/en
   - mv .public public
   artifacts:
     paths:
